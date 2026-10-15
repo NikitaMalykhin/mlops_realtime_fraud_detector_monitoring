@@ -4,10 +4,26 @@ import os
 
 import psycopg2
 from confluent_kafka import Consumer
+from prometheus_client import Counter, Histogram, Summary, start_http_server
 
 # Настройка логгирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+METRICS_PORT = int(os.getenv("METRICS_PORT", "8001"))
+SCORE_BUCKETS = [i / 50.0 for i in range(51)]
+
+DB_WRITE_TIME = Summary('scoring_db_write_seconds', 'Время записи скоринга в БД')
+SCORING_COUNT = Counter('scorings_total', 'Общее количество записанных скорингов')
+FRAUD_SCORE_HISTOGRAM = Histogram(
+    'scoring_fraud_score',
+    'Распределение записанных скоров мошенничества',
+    buckets=SCORE_BUCKETS,
+)
+FRAUD_COUNT = Counter(
+    'fraud_detected_total',
+    'Количество обнаруженных мошеннических транзакций',
+)
 
 
 def get_db_config():
@@ -39,6 +55,7 @@ def create_table(conn):
         logger.info("Таблица 'scores' проверена или создана.")
 
 
+@DB_WRITE_TIME.time()
 def insert_score(conn, data):
     with conn.cursor() as cur:
         cur.execute("""
@@ -52,8 +69,16 @@ def insert_score(conn, data):
         ))
         conn.commit()
 
+    SCORING_COUNT.inc()
+    FRAUD_SCORE_HISTOGRAM.observe(data["score"])
+    if data["fraud_flag"] == 1:
+        FRAUD_COUNT.inc()
+
 
 def run_consumer():
+    start_http_server(METRICS_PORT)
+    logger.info("Prometheus метрики доступны на порту %s", METRICS_PORT)
+
     kafka_bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS")
     scoring_topic = os.getenv("KAFKA_SCORING_TOPIC")
 

@@ -1,6 +1,6 @@
 # Антифрод: поток транзакций, скоринг и переобучение
 
-Учебный проект обнаружения мошеннических транзакций. Kafka несёт непрерывный поток событий, CatBoost скорит их текущей моделью, а Airflow по расписанию дописывает размеченные месяцы и переобучает модель.
+Учебный проект обнаружения мошеннических транзакций. Kafka несёт непрерывный поток событий, CatBoost скорит их текущей моделью, а Airflow по расписанию дописывает размеченные месяцы и переобучает модель. Prometheus и Grafana показывают скорость обработки, распределение скоров и смену версии модели.
 
 Датасет можно найти [здесь](https://www.kaggle.com/competitions/teta-ml-1-2025/data). В этом занятии используется файл `train.csv` из каталога практики занятия 07. Путь задаётся переменной `TRAIN_DATA_CSV`.
 
@@ -22,6 +22,10 @@ flowchart LR
   scorer --> scoring[Kafka scoring]
   scoring --> writer[scoring_writer]
   writer --> scores[scores]
+  scorer -->|metrics| prometheus[Prometheus]
+  writer -->|metrics| prometheus
+  nodeExporter[node_exporter] --> prometheus
+  prometheus --> grafana[Grafana]
 ```
 
 | Сервис | Описание |
@@ -35,6 +39,9 @@ flowchart LR
 | **PostgreSQL** | Витрина `labeled_transactions`, состояние окна `training_state` и таблица `scores` |
 | **data_loader** | При старте один раз загружает весь CSV в витрину и собирает исходное окно обучения: январь–март 2019 |
 | **airflow** | Два DAG каждые 5 минут: поставка нового размеченного месяца и переобучение CatBoost |
+| **Prometheus** | Собирает метрики `fraud_detector` (`:8000`), `scoring_writer` (`:8001`) и Node Exporter раз в секунду |
+| **Grafana** | Дашборды скоринга, записи в БД и системных метрик. Смена версии модели отмечена интервалом около 30 секунд с именем новой версии |
+| **Node Exporter** | Системные метрики хоста контейнеров: CPU, память, сеть, диск |
 
 Общий том `model_registry` смонтирован в Airflow как `/opt/airflow/models` и в `fraud_detector` как `/models`. Логика задач вынесена в `pipeline/`. Файлы в `dags/` только связывают задачи.
 
@@ -56,6 +63,8 @@ flowchart LR
 │   ├── retrain/              # Функции задач переобучения
 │   └── supply/               # Функции задач поставки месяца
 ├── airflow/                  # Образ Airflow с CatBoost
+├── prometheus/prometheus.yml # Источники метрик
+├── grafana/                  # Datasource, provisioning и дашборды
 ├── docker-compose.yaml
 ├── .env.example
 └── README.md
@@ -85,6 +94,7 @@ flowchart LR
 - **Kafka**: потоковая обработка данных
 - **PostgreSQL**: витрина размеченных данных и результаты скоринга
 - **Airflow 2.10**: поставка месячных батчей и переобучение модели
+- **Prometheus / Grafana**: сбор и визуализация метрик скоринга и хоста
 - **Docker / Docker Compose**: оркестрация микросервисов
 
 ---
@@ -121,6 +131,10 @@ docker compose up --build
 | **Kafka UI** | http://localhost:8080 |
 | **Airflow** | http://localhost:8081 (`admin` / `admin`) |
 | **PostgreSQL** | `localhost:5432`, база `fraud_db` |
+| **Prometheus** | http://localhost:9090 |
+| **Grafana** | http://localhost:3000 (`admin` / `admin`) |
+
+При первом входе Grafana предлагает сменить пароль. Кнопка Skip оставляет `admin` / `admin`.
 
 Пользователь и пароль Postgres задаются в `.env` (`fraud_user` / `fraud_pass` в шаблоне).
 
@@ -169,7 +183,8 @@ docker compose exec airflow ls -la /opt/airflow/models
 1. В Kafka UI топик `transactions` пополняется каждые 0.1 секунды, топик `scoring` — ответами модели.
 2. В Airflow откройте `supply_labeled_batch` и `retrain_catboost`. Кнопка Trigger запускает прогон сразу.
 3. После публикации модели новые сообщения в `scores` получают свежий `model_version`.
+4. В Grafana откройте Fraud Detection Dashboard и Scoring Dashboard. На графиках скоров смена модели видна как отметка примерно в 30 секунд с подписью `model_version`. Node Metrics показывает CPU, память, сеть и диск.
 
 ### Очистка
 
-`docker compose down -v` удаляет контейнеры вместе с витриной, окном обучения, реестром моделей и состоянием Airflow. Следующий запуск снова загрузит CSV.
+`docker compose down -v` удаляет контейнеры вместе с витриной, окном обучения, реестром моделей, состоянием Airflow и томами Prometheus и Grafana. Следующий запуск снова загрузит CSV.
