@@ -94,8 +94,8 @@ flowchart LR
 ### 1. Клонируйте репозиторий
 
 ```bash
-git clone https://github.com/NikitaMalykhin/mlops_realtime_fraud_detector_airflow.git
-cd mlops_realtime_fraud_detector_airflow
+git clone https://github.com/NikitaMalykhin/mlops_realtime_fraud_detector_monitoring.git
+cd mlops_realtime_fraud_detector_monitoring
 ```
 
 ### 2. Создайте `.env` файл
